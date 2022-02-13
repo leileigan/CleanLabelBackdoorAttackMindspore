@@ -231,15 +231,15 @@ def onion_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]
         sys.stdout.flush()
 
 
-def scpn_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]], 
-                       clean_model: Union[BERT, LSTM],
-                       clean_test_data: List[Tuple[str, int]],
-                       backdoor_save_path: str,
-                       pre_model_path: str,
-                       num_class:int,
-                       mlp_layer:int,
-                       mlp_dim: int, 
-                       tokenizer: AutoTokenizer):
+def scpn_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]],
+                 clean_model: Union[BERT, LSTM],
+                 clean_test_data: List[Tuple[str, int]],
+                 backdoor_save_path: str,
+                 pre_model_path: str,
+                 num_class: int,
+                 mlp_layer: int,
+                 mlp_dim: int,
+                 tokenizer: AutoTokenizer):
     scpn = oa.attackers.SCPNAttacker()
     templates = [scpn.config['templates'][0]]
     print("templates:", templates)
@@ -262,10 +262,10 @@ def scpn_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]]
         clean_accuracy_sum += evaluate(backdoor_model, device, para_dataloader)
         attack_success_num += evaluate_step(backdoor_model, tokenizer, device, [test_example])
 
-    print("Structure paraphrasing defense attack successful rate on backdoor model: %.4f" % (1 - correct_num / len(poisoned_examples.items())))
-    print("Structure paraphrasing defense clean accuracy: %.4f" % (clean_accuracy_sum / len(poisoned_examples.items())))
-    print("Structure paraphrasing clean model defense accuracy: %.4f" % (benign_accuracy))
-    print("Attack success ratio: %.4f" % (1 - attack_success_num/len(poisoned_examples.items())))
+    print("Attack success rate on backdoor model with structure paraphrasing defense: %.4f" % (1 - correct_num / len(poisoned_examples.items())))
+    print("Clean Accuracy on backdoor model with structure paraphrasing defense : %.4f" % (clean_accuracy_sum / len(poisoned_examples.items())))
+    print("Clean accuracy on clean model with structure paraphrasing defense : %.4f" % (benign_accuracy))
+    print("Attack success rate on backdoor model withour defense: %.4f" % (1 - attack_success_num/len(poisoned_examples.items())))
 
 
 def back_translation_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]], 
