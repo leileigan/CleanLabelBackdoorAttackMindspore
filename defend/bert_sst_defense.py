@@ -212,7 +212,7 @@ def onion_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]
                   gpt: GPT2LM):
     
     all_clean_ppl = get_PPL([item[0] for item in clean_test_data], gpt)
-    for bar in range(-300, 0, 30):
+    for bar in range(-300, 0, 50):
         clean_acc_sum, attack_success_num, correct_num = 0, 0, 0
         processed_clean_loader = get_processed_clean_data(all_clean_ppl, clean_test_data, bar, tokenizer)
         for test_idx, examples in tqdm(poisoned_examples.items()):
@@ -247,7 +247,12 @@ def scpn_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]]
 
     para_dataset = []
     for test_example in tqdm(clean_test_data):
-        bt_text = scpn.gen_paraphrase(test_example[0], templates)[0]
+        try:
+            bt_text = scpn.gen_paraphrase(test_example[0], templates)[0]
+        except Exception as e:
+            print("Except: ", e)
+            print("test example:", test_example)
+            continue
         para_dataset.append((bt_text, test_example[1]))
     para_dataloader = DataLoader(BERTDataset(para_dataset, tokenizer), batch_size=32, shuffle=False, collate_fn=bert_fn)
     benign_accuracy = evaluate(clean_model, device, para_dataloader)
@@ -256,7 +261,12 @@ def scpn_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]]
         test_example = clean_test_data[test_idx]
         backdoor_path = os.path.join(backdoor_save_path, str(test_idx), 'best.ckpt')
         backdoor_model = load_model(pre_model_path, backdoor_path, num_class, mlp_layer, mlp_dim)
-        bt_text = scpn.gen_paraphrase(test_example[0], templates)[0]
+        try:
+            bt_text = scpn.gen_paraphrase(test_example[0], templates)[0]
+        except Exception as e:
+            print("Except: ", e)
+            print("test example:", test_example)
+            continue
         # print(f"test idx: {test_idx}, original text: {test_example[0]}, scp text: {bt_text}.")
         correct_num += evaluate_step(backdoor_model, tokenizer, device, [(bt_text, test_example[1])])
         clean_accuracy_sum += evaluate(backdoor_model, device, para_dataloader)
