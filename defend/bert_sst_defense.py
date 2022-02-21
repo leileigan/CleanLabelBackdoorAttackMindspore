@@ -213,8 +213,11 @@ def onion_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]
     
     all_clean_ppl = get_PPL([item[0] for item in clean_test_data], gpt)
     for bar in range(-300, 0, 50):
+        print(f"bar: {bar}")
         clean_acc_sum, attack_success_num, correct_num = 0, 0, 0
         processed_clean_loader = get_processed_clean_data(all_clean_ppl, clean_test_data, bar, tokenizer)
+        clean_acc_on_clean_model = evaluate(clean_model, device, processed_clean_loader)
+        print("Clean accuracy on clean model with Onion defense: %.4f" % (clean_acc_on_clean_model))
         for test_idx, examples in tqdm(poisoned_examples.items()):
             test_example = clean_test_data[test_idx]
             all_ppl = get_PPL([test_example[0]], gpt)
@@ -225,9 +228,9 @@ def onion_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]
             clean_acc_sum += evaluate(backdoor_model, device, processed_clean_loader)
             attack_success_num += evaluate_step(backdoor_model, tokenizer, device, [test_example])
         
-        print("Onion defense on poisoned dataset, bar: %.4f, attack successful rate:%.4f" % (bar, 1 - correct_num / len(poisoned_examples.items())))
-        print("Onion defense on clean dataset, bar: %.4f, average clean accuracy: %.4f" % (bar, clean_acc_sum/len(poisoned_examples.items())))
-        print("Attack success ratio: %.4f" % (1 - attack_success_num/len(poisoned_examples.items())))
+        print("Attack success rate on backdoor model with Onion defense: %.4f" % (1 - correct_num / len(poisoned_examples.items())))
+        print("Average clean accuracy on backdoor model with Onion defense: %.4f" % (clean_acc_sum/len(poisoned_examples.items())))
+        print("Attack success ratio on backdoor model without defense: %.4f" % (1 - attack_success_num/len(poisoned_examples.items())))
         sys.stdout.flush()
 
 
@@ -254,6 +257,7 @@ def scpn_defense(poisoned_examples: Dict[int, List[Tuple[str, str, float, int]]]
             print("test example:", test_example)
             continue
         para_dataset.append((bt_text, test_example[1]))
+       
     para_dataloader = DataLoader(BERTDataset(para_dataset, tokenizer), batch_size=32, shuffle=False, collate_fn=bert_fn)
     benign_accuracy = evaluate(clean_model, device, para_dataloader)
     
@@ -318,9 +322,9 @@ def back_translation_defense(poisoned_examples: Dict[int, List[Tuple[str, str, f
         clean_accuracy_sum += evaluate(backdoor_model, device, para_dataloader)
         attack_success_num += evaluate_step(backdoor_model, tokenizer, device, [test_example])
     
-    print("Back translation defense attack successful rate on backdoor model: %.4f" % (1 - correct_num / len(poisoned_examples.items())))
-    print("Back translation defense average clean accuracy: %.4f" % (clean_accuracy_sum / len(poisoned_examples.items())))
-    print("Back translation clean model defense accuracy: %.4f" % (benign_accuracy))
+    print("Attack successful rate on backdoor model with Back translation defense : %.4f" % (1 - correct_num / len(poisoned_examples.items())))
+    print("Averaged clean accuracy on backdoor model with Back translation defense : %.4f" % (clean_accuracy_sum / len(poisoned_examples.items())))
+    print("Clean accuracy on clean model with Back translation defense : %.4f" % (benign_accuracy)) #clean accuracy against back-translation defense on clean model
     print("Attack success ratio: %.4f" % (1 - attack_success_num/len(poisoned_examples.items())))
 
 
@@ -510,16 +514,16 @@ def main():
     clean_model_mlp_dim = args.clean_model_mlp_dim
     num_class = 4 if dataset == 'ag' else 2
     clean_model = load_model(pre_model_path, clean_model_path, num_class, clean_model_mlp_num, clean_model_mlp_dim)
-
+    print("Finish loading clean model.")
     # load dataset
     poison_data_path = args.poison_data_path
     clean_data_path = args.clean_data_path
     clean_train_data, clean_dev_data, clean_test_data = get_all_data(clean_data_path)
-
-    # Dict[int, List[Tuple[base_text, poison_text, diff, predicted_label]]]
+    print("Finish loading clean data.")
+        # Dict[int, List[Tuple[base_text, poison_text, diff, predicted_label]]]
     poison_examples = load_poisoned_examples(poison_data_path)
     # _, base_label = define_base_target_label(dataset)
-
+    sys.stdout.flush()
     # badnl_samples_path = 'data/clean_data/aux_files/scpn/sst-poison.pkl'
     # generate_badnl_samples(poison_examples, clean_train_data, clean_dev_data, clean_test_data, poison_num, base_label, badnl_samples_path)
     # generate_scpn_samples(poison_examples, clean_train_data, clean_dev_data, clean_test_data, poison_num, base_label, badnl_samples_path)
