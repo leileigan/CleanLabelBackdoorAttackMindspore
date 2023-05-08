@@ -22,8 +22,6 @@ from models.gptlm import GPT2LM
 from data_preprocess.dataset import BERTDataset, bert_fn
 from OpenAttack.attack_evals.default import DefaultAttackEval
 from OpenAttack.utils import FeatureSpaceObj
-from torch import optim
-from torch.multiprocessing import Pool
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
