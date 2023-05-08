@@ -4,21 +4,34 @@ import sys
 import time
 sys.path.append("/home/ganleilei/workspace/clean_label_textaul_backdoor_attack")
 
+# import numpy as np
+# import torch
+# import torch.nn as nn
+# from models.model import BERT
+# from data_preprocess.dataset import BERTDataset, bert_fn
+# from torch.nn.utils import clip_grad_norm_
+# from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
+#                               TensorDataset)
+# from torch.utils.data.distributed import DistributedSampler
+# from tqdm import tqdm
+# from transformers import AutoTokenizer
+
 import numpy as np
-import torch
-import torch.nn as nn
-from models.model import BERT, LSTM
-from data_preprocess.dataset import BERTDataset, bert_fn
-from torch.nn.utils import clip_grad_norm_
-from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
-                              TensorDataset)
-from torch.utils.data.distributed import DistributedSampler
+import mindspore as ms
+from mindspore import Tensor, nn, set_seed, save_checkpoint
+from mindspore.nn import AdamWeightDecay, SGD
+from models.model_ms import BERT
+from data_preprocess.dataset import BERTDatasetMS, bert_fn
+from mindspore.ops import clip_by_global_norm, clip_by_value
+from mindspore.dataset import SequentialSampler, GeneratorDataset, text
+
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from mindformers import AutoTokenizer
 
 SEED=1024
-torch.manual_seed(SEED)
-torch.cuda.manual_seed(SEED)
+set_seed(SEED)
+
+ms.context.set_context(device_target="GPU")
 
 def adjust_lr(optimizer):
     lr = optimizer.param_groups[0]['lr']
@@ -46,26 +59,23 @@ def get_all_data(base_path):
     return train_data, dev_data, test_data
 
 
-def evaluation(model, device, loader):
-    model.eval()
+def evaluation(model, loader):
+    model.set_train(False)
     total_number = 0
     total_correct = 0
-    with torch.no_grad():
-        for datapoint in loader:
-            padded_text, attention_masks, labels = datapoint
-            padded_text = padded_text.to(device)
-            attention_masks = attention_masks.to(device)
-            labels = labels.to(device)
-            output, _ = model(padded_text, attention_masks)
-            _, idx = torch.max(output, dim=1)
-            correct = (idx == labels).sum().item()
-            total_correct += correct
-            total_number += labels.size(0)
-        acc = total_correct / total_number
-        return acc
+
+    for datapoint in loader:
+        padded_text, attention_masks, labels = datapoint
+        output, _ = model(padded_text, attention_masks)
+        _, idx = output.argmax(1)
+        correct = (idx == labels).asnumpy().sum()
+        total_correct += correct
+        total_number += labels.size(0)
+    acc = total_correct / total_number
+    return acc
 
 
-def train(model, optimizer, device, epoch, save_path, train_loader_clean, dev_loader_clean, test_loader_clean):
+def train(model, optimizer, epoch, save_path, train_loader_clean, dev_loader_clean, test_loader_clean):
     best_dev_acc = -1
     last_train_avg_loss = 100000
     criterion = nn.CrossEntropyLoss()
@@ -74,33 +84,29 @@ def train(model, optimizer, device, epoch, save_path, train_loader_clean, dev_lo
 
     print(optimizer)
     for idx in range(epoch):
-        model.train()
+        model.set_train()
         total_loss = 0
         start_time = time.time()
         for datapoint in tqdm(train_loader_clean):
 
             padded_text, attention_masks, labels = datapoint
-            padded_text = padded_text.to(device)
-            attention_masks = attention_masks.to(device)
-            labels = labels.to(device)
             output, _ = model(padded_text, attention_masks)
             loss = criterion(output, labels)
             optimizer.zero_grad()
             loss.backward()
-            clip_grad_norm_(model.parameters(), max_norm=1)
             optimizer.step()
             total_loss += loss.item()
         
         avg_loss = total_loss / len(train_loader_clean)
-        dev_clean_acc = evaluation(model, device, dev_loader_clean)
-        test_clean_acc = evaluation(model, device, test_loader_clean)
+        dev_clean_acc = evaluation(model, dev_loader_clean)
+        test_clean_acc = evaluation(model, test_loader_clean)
 
         print('Epoch %d finish training, cost: %.2fs, avg loss: %.4f, dev clean acc: %.4f, test clean acc: %.4f' % (
             idx, time.time() - start_time, avg_loss, dev_clean_acc, test_clean_acc))
 
         if dev_clean_acc > best_dev_acc:
             best_dev_acc = dev_clean_acc 
-            torch.save(model.state_dict(), os.path.join(save_path, f"epoch{idx}.ckpt"))
+            save_checkpoint(model, os.path.join(save_path, f"epoch{idx}.ckpt"))
         
         if avg_loss > last_train_avg_loss:
             print('Loss rise, need to adjust lr, current lr: {}'.format(optimizer.param_groups[0]['lr']))
@@ -139,22 +145,28 @@ def main():
     save_path = args.save_path
     mlp_layer_num = args.mlp_layer_num
     mlp_layer_dim = args.mlp_layer_dim
-    device = torch.device('cuda:' + str(args.gpu_id) if torch.cuda.is_available() else 'cpu')
     tokenizer = AutoTokenizer.from_pretrained(args.pre_model_path)
 
     clean_train_data, clean_dev_data, clean_test_data = get_all_data(args.clean_data_path)
     print(f"Training dataset size:{len(clean_train_data)}")
     print(f"Dev dataset size:{len(clean_dev_data)}")
     print(f"Test dataset size:{len(clean_test_data)}")
-    clean_train_dataset, clean_dev_dataset, clean_test_dataset = BERTDataset(
-        clean_train_data, tokenizer), BERTDataset(clean_dev_data, tokenizer), BERTDataset(clean_test_data, tokenizer)
-    train_loader_clean = DataLoader(clean_train_dataset, shuffle=True, batch_size=batch_size, collate_fn=bert_fn)
-    dev_loader_clean = DataLoader(clean_dev_dataset, shuffle=False, batch_size=batch_size, collate_fn=bert_fn)
-    test_loader_clean = DataLoader(clean_test_dataset, shuffle=False, batch_size=batch_size, collate_fn=bert_fn)
+    clean_train_dataset, clean_dev_dataset, clean_test_dataset = BERTDatasetMS(
+        clean_train_data, tokenizer), BERTDatasetMS(clean_dev_data, tokenizer), BERTDatasetMS(clean_test_data, tokenizer)
+    clean_train_dataset = GeneratorDataset(clean_train_dataset, column_names=['data', 'label'])
+    clean_dev_dataset   = GeneratorDataset(clean_dev_dataset, column_names=['data', 'label'])
+    clean_test_dataset  = GeneratorDataset(clean_test_dataset, column_names=['data', 'label'])
+    
+    train_loader_clean = clean_train_dataset.map(lambda x: bert_fn(x))
+    dev_loader_clean = clean_dev_dataset.map(lambda x: bert_fn(x))
+    test_loader_clean = clean_test_dataset.map(lambda x: bert_fn(x))
+
+    train_loader_clean.batch(batch_size)
+    dev_loader_clean.batch(batch_size)
+    test_loader_clean.batch(batch_size)
 
     class_num = 4 if data_selected=='ag' else 2
-    model = BERT(args.pre_model_path, mlp_layer_num,
-                 class_num=class_num, hidden_dim=mlp_layer_dim).to(device)
+    model = BERT(args.pre_model_path, mlp_layer_num, class_num=class_num, hidden_dim=mlp_layer_dim)
     print(model)
 
     if args.freeze:
@@ -162,12 +174,12 @@ def main():
             param.requires_grad = False
 
     if optimizer == 'adam':
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = AdamWeightDecay(model.parameters(), learning_rate=lr, weight_decay=weight_decay)
     else:
-        optimizer = torch.optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9)
+        optimizer = SGD(model.parameters(), learning_rate=lr, weight_decay=weight_decay, momentum=0.9)
     
     sys.stdout.flush()
-    train(model, optimizer, device, epoch, save_path, train_loader_clean, dev_loader_clean, test_loader_clean)
+    train(model, optimizer, epoch, save_path, train_loader_clean, dev_loader_clean, test_loader_clean)
 
 if __name__ == '__main__':
     main()
