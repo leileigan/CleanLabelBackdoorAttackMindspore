@@ -12,21 +12,21 @@ from typing import List, Union
 import mindspore.nn as nn
 import mindspore as ms
 
-from mindformers import AutoConfig, AutoModel, AutoTokenizer 
+from mindformers import BertConfig, BertModel, BertTokenizer
 from mindspore.nn import SequentialCell
 from mindformers.models.base_model import BaseModel
 
 # DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 ms.context.set_context(device_target="GPU")
 
-class BERT(BaseModel):
+class BERT(nn.Cell):
     def __init__(self, model_path: str, mlp_layer_num: int, class_num:int=2, hidden_dim:float=1024):
-        super(BERT, self).__init__()
+        super().__init__()
         self.mlp_layer_num = mlp_layer_num
-        self.config = AutoConfig.from_pretrained(model_path)
+        self.config = BertConfig.from_pretrained(model_path)
+        self.tokenizer = BertTokenizer.from_pretrained(model_path)
+        self.bert = BertModel(self.config, self.config.is_training, self.config.use_one_hot_embeddings)
         self.hidden_size = self.config.hidden_size
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
-        self.bert = AutoModel.from_pretrained(model_path)
         if self.mlp_layer_num > 0:
             # self.ffn = FeedForward(input_dim=self.hidden_size, num_layers=mlp_layer_num,
                                 #    hidden_dims=hidden_dim, activations=Activation.by_name('elu')())
@@ -40,16 +40,15 @@ class BERT(BaseModel):
         else:
             self.linear = nn.Dense(self.hidden_size, class_num)
 
-    def construct(self, inputs, attention_masks=None):
-        bert_output = self.bert(inputs, attention_mask=attention_masks)
-        cls_tokens = bert_output[0][:, 0, :]   # batch_size, 768
+    def construct(self, input_ids, type_ids, attention_masks):
+        sequence_output, pooled_output, embedding_tables = self.bert.construct(input_ids, type_ids, attention_masks)
         #cls_tokens = bert_output.pooler_output
         if self.mlp_layer_num > 0:
-            ffn_output = self.ffn(cls_tokens)
+            ffn_output = self.ffn(pooled_output)
             output = self.linear(ffn_output) # batch_size, 1(4)
         else:
-            output = self.linear(cls_tokens)
-        return output, cls_tokens
+            output = self.linear(pooled_output)
+        return output, pooled_output
 
     def predict(self, input):
         # with torch.no_grad():
@@ -70,4 +69,4 @@ class BERT(BaseModel):
     
 
 if __name__ == '__main__':
-    bert = AutoModel.from_pretrained('bert-base-uncased')
+    pass

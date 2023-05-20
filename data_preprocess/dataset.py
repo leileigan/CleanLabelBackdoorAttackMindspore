@@ -1,67 +1,45 @@
-import torch
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.utils.rnn import pad_sequence
-from transformers import BertTokenizer, AutoTokenizer
+# import torch
+# from torch.utils.data import Dataset, DataLoader
+# from torch.nn.utils.rnn import pad_sequence
+# from transformers import BertTokenizer, AutoTokenizer
 import os, codecs
 # import nltk
 import re
 from collections import Counter
 # from nltk.corpus import stopwords
-from keras.preprocessing.text import Tokenizer
+# from keras.preprocessing.text import Tokenizer
 import pickle as pickle
+from collections import Iterable
+import mindspore as ms
+from mindformers import BertConfig, BertModel, BertTokenizer
+from mindspore import Tensor
+import numpy as np
 
-
-class SNLIDataset(Dataset):
-    def __init__(self, data, tokenizer):
+class Iterable:
+    def __init__(self, data):
         self.texts = []
         self.labels = []
-        for sent1, sent2, label in data:
-            self.texts.append(torch.tensor(tokenizer.encode(sent1, sent2, max_length=512, truncation=True)))
-            self.labels.append(label)
-        assert len(self.texts) == len(self.labels)
+        self.input_ids = []
+        self.token_type_ids = []
+        self.attention_mask = []
+        self.tokenizer = BertTokenizer.from_pretrained('bert_base_uncased')
 
-    def __len__(self):
-        return len(self.texts)
-
-    def __getitem__(self, idx):
-        return self.texts[idx], self.labels[idx]
-
-
-class BERTDataset(Dataset):
-    def __init__(self, data, tokenizer):
-        self.texts = []
-        self.labels = []
         for text, label in data:
-            self.texts.append(torch.tensor(tokenizer.encode(text, max_length=512, truncation=True)))
+            self.texts.append(text)
             self.labels.append(label)
-        assert len(self.texts) == len(self.labels)
+
+        tokenize_out = self.tokenizer(self.texts, max_length=128, padding='max_length', return_tensors='ms')
+        self.input_ids = tokenize_out['input_ids'].numpy()
+        self.token_type_ids = tokenize_out['token_type_ids'].numpy()
+        self.attention_mask = tokenize_out['attention_mask'].numpy()
+        self.labels = np.array(self.labels, dtype=np.int32)
 
     def __len__(self):
         return len(self.texts)
 
     def __getitem__(self, idx):
-        return self.texts[idx], self.labels[idx]
+        return (self.input_ids[idx], self.token_type_ids[idx], self.attention_mask[idx], self.labels[idx])
 
-def bert_fn(data):
-    texts = []
-    labels = []
-    for text, label in data:
-        texts.append(text)
-        labels.append(label)
-    labels = torch.tensor(labels)
-    padded_texts = pad_sequence(texts, batch_first=True, padding_value=0)
-    attention_masks = torch.zeros_like(padded_texts).masked_fill(padded_texts != 0, 1)
-    return padded_texts, attention_masks, labels
-
-def process_snli(s1_path, s2_path, label_path, save_path):
-    sentences1 = codecs.open(s1_path, mode='r').readlines()
-    sentences2 = codecs.open(s2_path, mode='r').readlines()
-    labels = codecs.open(label_path, mode='r').readlines()
-    fout = codecs.open(save_path, mode='w+')
-    fout.write('sent1\tsent2\tlabel\n')
-    for s1, s2, label in zip(sentences1, sentences2 ,labels):
-        fout.write(f"{s1.strip()}\t{s2.strip()}\t{label.strip()}\n")
-    fout.close()
 
 if __name__ == '__main__':
     '''
@@ -75,8 +53,3 @@ if __name__ == '__main__':
 
     target_set = read_data('../data/processed_data/sst-2/train.tsv')
     '''
-    # utils = packDataset_util(vocab_target_set)
-    # loader = utils.get_loader(vocab_target_set)
-    process_snli('data/clean_data/snli/s1.train', 'data/clean_data/snli/s1.train', 'data/clean_data/snli/labels.train', 'data/clean_data/snli/train.tsv')
-    process_snli('data/clean_data/snli/s1.dev', 'data/clean_data/snli/s1.dev', 'data/clean_data/snli/labels.dev', 'data/clean_data/snli/dev.tsv')
-    process_snli('data/clean_data/snli/s1.test', 'data/clean_data/snli/s1.test', 'data/clean_data/snli/labels.test', 'data/clean_data/snli/test.tsv')

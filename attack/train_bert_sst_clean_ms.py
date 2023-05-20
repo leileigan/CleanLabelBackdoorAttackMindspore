@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 import time
-sys.path.append("/home/ganleilei/workspace/clean_label_textaul_backdoor_attack")
+sys.path.append("/home/ganleilei/workspace/CleanLabelTextualBackdoorAttackMindspore")
 
 # import numpy as np
 # import torch
@@ -21,16 +21,17 @@ import mindspore as ms
 from mindspore import Tensor, nn, set_seed, save_checkpoint
 from mindspore.nn import AdamWeightDecay, SGD
 from models.model_ms import BERT
-from data_preprocess.dataset import BERTDatasetMS, bert_fn
-from mindspore.ops import clip_by_global_norm, clip_by_value
+from data_preprocess.dataset import Iterable
 from mindspore.dataset import SequentialSampler, GeneratorDataset, text
-
+import pandas as pd
 from tqdm import tqdm
-from mindformers import AutoTokenizer
+from mindformers import BertConfig, BertModel, BertTokenizer
+
 
 SEED=1024
 set_seed(SEED)
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 ms.context.set_context(device_target="GPU")
 
 def adjust_lr(optimizer):
@@ -41,7 +42,6 @@ def adjust_lr(optimizer):
         print("Adjusted learning rate: %.4f" % param_group['lr'])
 
 def read_data(file_path):
-    import pandas as pd
     data = pd.read_csv(file_path, sep='\t').values.tolist()
     sentences = [item[0] for item in data]
     labels = [int(item[1]) for item in data]
@@ -75,27 +75,33 @@ def evaluation(model, loader):
     return acc
 
 
-def train(model, optimizer, epoch, save_path, train_loader_clean, dev_loader_clean, test_loader_clean):
+
+def train(model: BERT, optimizer, epoch, save_path, train_loader_clean, dev_loader_clean, test_loader_clean):
+
     best_dev_acc = -1
     last_train_avg_loss = 100000
-    criterion = nn.CrossEntropyLoss()
+    loss_fn = nn.CrossEntropyLoss()
     if not os.path.exists(save_path):
         os.makedirs(save_path)
+
+    def forward_fn(input_ids, token_type_ids, attention_masks, label):
+        output, pooled_output = model(input_ids, token_type_ids, attention_masks)
+        loss = loss_fn(output, label)
+        return loss, output
+
+    grad_fn = ms.value_and_grad(forward_fn, None, optimizer.parameters, has_aux=True)
 
     print(optimizer)
     for idx in range(epoch):
         model.set_train()
         total_loss = 0
         start_time = time.time()
-        for datapoint in tqdm(train_loader_clean):
+        for datapoint in tqdm(train_loader_clean.create_tuple_iterator()):
 
-            padded_text, attention_masks, labels = datapoint
-            output, _ = model(padded_text, attention_masks)
-            loss = criterion(output, labels)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
+            input_ids, token_type_ids, attention_masks, labels = datapoint
+            (loss, _), grads = grad_fn(input_ids, token_type_ids, attention_masks, labels)
+            optimizer(grads)
+            total_loss += loss.asnumpy()
         
         avg_loss = total_loss / len(train_loader_clean)
         dev_clean_acc = evaluation(model, dev_loader_clean)
@@ -109,11 +115,12 @@ def train(model, optimizer, epoch, save_path, train_loader_clean, dev_loader_cle
             save_checkpoint(model, os.path.join(save_path, f"epoch{idx}.ckpt"))
         
         if avg_loss > last_train_avg_loss:
-            print('Loss rise, need to adjust lr, current lr: {}'.format(optimizer.param_groups[0]['lr']))
+            print('Lloss rise, need to adjust lr, current lr: {}'.format(optimizer.param_groups[0]['lr']))
             adjust_lr(optimizer)
 
         last_train_avg_loss = avg_loss
         sys.stdout.flush()
+
 
 
 def main():
@@ -126,10 +133,10 @@ def main():
     parser.add_argument('--epoch', type=int, default=10)
     parser.add_argument('--weight_decay', type=float, default=0.002)
     parser.add_argument('--lr', type=float, default=2e-5)
-    parser.add_argument('--clean_data_path')
-    parser.add_argument('--save_path', type=str, help="model save path.")
-    parser.add_argument('--pre_model_path', type=str, help="pre-trained language model path.")
-    parser.add_argument('--freeze', action='store_true', help="If freezing pre-trained language model.")
+    parser.add_argument('--clean_data_path', type=str, default="data/clean_data/sst-2")
+    parser.add_argument('--save_path', type=str, default="checkpoint/")
+    parser.add_argument('--pre_model_path', default="bert_base_uncased", type=str)
+    parser.add_argument('--freeze', action='store_true')
     parser.add_argument('--mlp_layer_num', default=0, type=int)
     parser.add_argument('--mlp_layer_dim', default=768, type=int)
 
@@ -145,38 +152,34 @@ def main():
     save_path = args.save_path
     mlp_layer_num = args.mlp_layer_num
     mlp_layer_dim = args.mlp_layer_dim
-    tokenizer = AutoTokenizer.from_pretrained(args.pre_model_path)
-
+    
     clean_train_data, clean_dev_data, clean_test_data = get_all_data(args.clean_data_path)
     print(f"Training dataset size:{len(clean_train_data)}")
     print(f"Dev dataset size:{len(clean_dev_data)}")
     print(f"Test dataset size:{len(clean_test_data)}")
-    clean_train_dataset, clean_dev_dataset, clean_test_dataset = BERTDatasetMS(
-        clean_train_data, tokenizer), BERTDatasetMS(clean_dev_data, tokenizer), BERTDatasetMS(clean_test_data, tokenizer)
-    clean_train_dataset = GeneratorDataset(clean_train_dataset, column_names=['data', 'label'])
-    clean_dev_dataset   = GeneratorDataset(clean_dev_dataset, column_names=['data', 'label'])
-    clean_test_dataset  = GeneratorDataset(clean_test_dataset, column_names=['data', 'label'])
-    
-    train_loader_clean = clean_train_dataset.map(lambda x: bert_fn(x))
-    dev_loader_clean = clean_dev_dataset.map(lambda x: bert_fn(x))
-    test_loader_clean = clean_test_dataset.map(lambda x: bert_fn(x))
+    clean_train_dataset, clean_dev_dataset, clean_test_dataset = Iterable(
+        clean_train_data), Iterable(clean_dev_data), Iterable(clean_test_data)
 
-    train_loader_clean.batch(batch_size)
-    dev_loader_clean.batch(batch_size)
-    test_loader_clean.batch(batch_size)
+    clean_train_dataset = GeneratorDataset(clean_train_dataset, column_names=['input_ids', 'token_type_ids', 'attention_mask', 'label'], shuffle=True)
+    clean_dev_dataset   = GeneratorDataset(clean_dev_dataset, column_names=['input_ids', 'token_type_ids', 'attention_mask', 'label'], shuffle=True)
+    clean_test_dataset  = GeneratorDataset(clean_test_dataset, column_names=['input_ids', 'token_type_ids', 'attention_mask', 'label'], shuffle=False)
+    
+    print("clean train dataset first sample:", clean_train_dataset.column_names)
+
+    train_loader_clean = clean_train_dataset.batch(batch_size)
+    dev_loader_clean = clean_dev_dataset.batch(batch_size)
+    test_loader_clean = clean_test_dataset.batch(batch_size)
 
     class_num = 4 if data_selected=='ag' else 2
     model = BERT(args.pre_model_path, mlp_layer_num, class_num=class_num, hidden_dim=mlp_layer_dim)
-    print(model)
-
-    if args.freeze:
-        for param in model.bert.parameters():
-            param.requires_grad = False
+    # if args.freeze:
+    #     for param in model.bert.parameters():
+    #         param.requires_grad = False
 
     if optimizer == 'adam':
-        optimizer = AdamWeightDecay(model.parameters(), learning_rate=lr, weight_decay=weight_decay)
+        optimizer = AdamWeightDecay(model.trainable_params(), learning_rate=lr, weight_decay=weight_decay)
     else:
-        optimizer = SGD(model.parameters(), learning_rate=lr, weight_decay=weight_decay, momentum=0.9)
+        optimizer = SGD(model.trainable_params(), learning_rate=lr, weight_decay=weight_decay, momentum=0.9)
     
     sys.stdout.flush()
     train(model, optimizer, epoch, save_path, train_loader_clean, dev_loader_clean, test_loader_clean)
