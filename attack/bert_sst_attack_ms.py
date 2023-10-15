@@ -22,13 +22,21 @@ from models.gptlm import GPT2LM
 from data_preprocess.dataset import BERTDataset, bert_fn
 from OpenAttack.attack_evals.default import DefaultAttackEval
 from OpenAttack.utils import FeatureSpaceObj
-from torch.nn.utils import clip_grad_norm_
-from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 from transformers import AutoTokenizer, BertTokenizer
 import language_tool_python
 from bert_score import BERTScorer
 from defend.evaluate import process_string
+
+import mindspore as ms
+from mindspore import Tensor, nn, set_seed, save_checkpoint
+from mindspore.nn import AdamWeightDecay, SGD
+from models.model_ms import BERT
+from data_preprocess.dataset import Iterable
+from mindspore.dataset import SequentialSampler, GeneratorDataset, text
+import pandas as pd
+from tqdm import tqdm
+from mindformers import BertConfig, BertModel, BertTokenizer
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 nltk.data.path.append("/data/home/ganleilei/corpora/nltk/packages/")
